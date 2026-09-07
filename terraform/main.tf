@@ -87,14 +87,31 @@ module "compute" {
   security_group_id   = module.networking.lambda_security_group_id
   opensearch_endpoint = module.search.endpoint
   environment_vars = {
-    FA_RUN_MODE                   = "aws"
-    FA_USE_MOCK_BEDROCK           = "false"
-    AWS_REGION                    = var.aws_region
-    FA_OPENSEARCH_HOST            = module.search.endpoint
-    FA_BEDROCK_REASONING_MODEL_ID = var.bedrock_reasoning_model_id
-    FA_BEDROCK_EMBEDDING_MODEL_ID = var.bedrock_embedding_model_id
+    FA_RUN_MODE                    = "aws"
+    FA_USE_MOCK_BEDROCK            = "false"
+    AWS_REGION                     = var.aws_region
+    FA_OPENSEARCH_HOST             = module.search.endpoint
+    FA_BEDROCK_REASONING_MODEL_ID  = var.bedrock_reasoning_model_id
+    FA_BEDROCK_EMBEDDING_MODEL_ID  = var.bedrock_embedding_model_id
+    FA_ENABLE_RERANKING            = tostring(var.enable_reranker)
+    FA_SAGEMAKER_RERANKER_ENDPOINT = var.enable_reranker ? module.reranker[0].endpoint_name : ""
   }
   tags = local.common_tags
+}
+
+# --- Reranker: SageMaker cross-encoder endpoint (Stage 2 ranking) -----------
+# Opt-in: set enable_reranker=true (and provide model artifact + image) to
+# deploy. When off, the app uses the fused ranking / local reranker instead.
+module "reranker" {
+  count              = var.enable_reranker ? 1 : 0
+  source             = "./modules/reranker"
+  name_prefix        = local.name_prefix
+  model_data_url     = var.reranker_model_data_url
+  image_uri          = var.reranker_image_uri
+  execution_role_arn = module.security.sagemaker_role_arn
+  instance_type      = var.reranker_instance_type
+  kms_key_arn        = module.security.kms_key_arn
+  tags               = local.common_tags
 }
 
 # --- Monitoring: budget alarm + SNS alerts ----------------------------------

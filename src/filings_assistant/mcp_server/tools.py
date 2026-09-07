@@ -18,6 +18,7 @@ from typing import Any
 
 from filings_assistant.common.logging import get_logger
 from filings_assistant.common.storage import get_repository
+from filings_assistant.common.tenant import TenantContext
 from filings_assistant.ingestion.service import IngestionService
 from filings_assistant.models import FilingForm, SearchHit
 from filings_assistant.search.service import SearchService
@@ -100,13 +101,22 @@ def _hits_to_payload(hits: list[SearchHit]) -> dict[str, Any]:
 
 
 class ToolRegistry:
-    """Holds the tool handlers and dispatches calls by name."""
+    """Holds the tool handlers and dispatches calls by name.
+
+    SECURITY: a registry is bound to exactly one ``TenantContext`` at
+    construction. Handlers inject that tenant into every storage/search call.
+    Tool *schemas* expose no ``tenant_id`` parameter, so the LLM has no way to
+    specify or change the tenant — cross-tenant access is impossible by
+    construction, even under prompt injection.
+    """
 
     def __init__(
         self,
+        tenant: TenantContext,
         search_service: SearchService | None = None,
         ingestion_service: IngestionService | None = None,
     ) -> None:
+        self._tenant = tenant
         self._search = search_service or SearchService()
         self._ingest = ingestion_service or IngestionService()
         self._handlers: dict[str, Callable[..., dict[str, Any]]] = {
@@ -138,9 +148,9 @@ class ToolRegistry:
             logger.error("Tool call failed", tool=name, error=str(exc))
             return {"error": str(exc)}
 
-    # -- handlers -----------------------------------------------------------
+    # -- handlers (tenant is injected from self._tenant, never from args) ----
     def _ingest_filing(self, ticker: str, form: str = "10-K", limit: int = 1) -> dict[str, Any]:
-        stored = self._ingest.ingest(ticker, FilingForm(form), limit)
+        stored = self._ingest.ingest(self._tenant, ticker, FilingForm(form), limit)
         # Index immediately so results are queryable right after ingest.
         from filings_assistant.worker.processor import WorkerProcessor
 
@@ -152,16 +162,16 @@ class ToolRegistry:
         }
 
     def _keyword_search(self, query: str, top_k: int = 6) -> dict[str, Any]:
-        return _hits_to_payload(self._search.keyword_search(query, top_k))
+        return _hits_to_payload(self._search.keyword_search(self._tenant, query, top_k))
 
     def _semantic_search(self, query: str, top_k: int = 6) -> dict[str, Any]:
-        return _hits_to_payload(self._search.semantic_search(query, top_k))
+        return _hits_to_payload(self._search.semantic_search(self._tenant, query, top_k))
 
     def _hybrid_search(self, query: str, top_k: int = 6) -> dict[str, Any]:
-        return _hits_to_payload(self._search.hybrid_search(query, top_k))
+        return _hits_to_payload(self._search.hybrid_search(self._tenant, query, top_k))
 
     def _get_document(self, filing_id: str) -> dict[str, Any]:
-        filing = get_repository().get_filing(filing_id)
+        filing = get_repository().get_filing(self._tenant.tenant_id, filing_id)
         if filing is None:
             return {"error": f"Filing not found: {filing_id}"}
         return {
@@ -176,7 +186,7 @@ class ToolRegistry:
         }
 
     def _list_filings(self, limit: int = 20) -> dict[str, Any]:
-        filings = get_repository().list_filings(limit)
+        filings = get_repository().list_filings(self._tenant.tenant_id, limit)
         return {
             "count": len(filings),
             "filings": [

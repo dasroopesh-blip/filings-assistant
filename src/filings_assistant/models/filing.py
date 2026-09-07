@@ -40,6 +40,7 @@ class Filing(BaseModel):
     """A single SEC filing (the source-of-truth record in Postgres)."""
 
     filing_id: str = Field(default_factory=lambda: str(uuid4()))
+    tenant_id: str  # owning tenant; enforced at every layer for isolation
     cik: str  # SEC Central Index Key (zero-padded, 10 digits)
     ticker: str | None = None
     company_name: str
@@ -58,6 +59,7 @@ class Chunk(BaseModel):
     """A chunk of filing text with its embedding (an OpenSearch document)."""
 
     chunk_id: str = Field(default_factory=lambda: str(uuid4()))
+    tenant_id: str  # owning tenant; also indexed for defense-in-depth filtering
     filing_id: str
     cik: str
     ticker: str | None = None
@@ -74,6 +76,7 @@ class Chunk(BaseModel):
         """Serialize to the OpenSearch index document shape."""
         return {
             "chunk_id": self.chunk_id,
+            "tenant_id": self.tenant_id,
             "filing_id": self.filing_id,
             "cik": self.cik,
             "ticker": self.ticker,
@@ -92,6 +95,7 @@ class SearchHit(BaseModel):
     """A single retrieval result with provenance for citations."""
 
     chunk_id: str
+    tenant_id: str = ""
     filing_id: str
     ticker: str | None
     company_name: str
@@ -112,6 +116,7 @@ class SearchHit(BaseModel):
 class IngestJob(BaseModel):
     """Message placed on the queue after a filing is stored."""
 
+    tenant_id: str
     filing_id: str
     cik: str
     enqueued_at: datetime = Field(default_factory=_utcnow)

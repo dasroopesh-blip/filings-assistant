@@ -29,17 +29,22 @@ logger = get_logger("common.storage")
 # Repository interface
 # ---------------------------------------------------------------------------
 class FilingRepository(Protocol):
-    """Stores filings and tracks their ingest status."""
+    """Stores filings and tracks their ingest status.
+
+    Every method is tenant-scoped: reads/writes are constrained to ``tenant_id``
+    so one tenant can never see or mutate another's filings.
+    """
 
     def upsert_filing(self, filing: Filing) -> bool:
-        """Insert a filing; return False if an identical checksum already exists."""
+        """Insert a filing; return False if an identical checksum already exists
+        FOR THIS TENANT."""
         ...
 
-    def get_filing(self, filing_id: str) -> Filing | None: ...
+    def get_filing(self, tenant_id: str, filing_id: str) -> Filing | None: ...
 
-    def set_status(self, filing_id: str, status: IngestStatus) -> None: ...
+    def set_status(self, tenant_id: str, filing_id: str, status: IngestStatus) -> None: ...
 
-    def list_filings(self, limit: int = 50) -> list[Filing]: ...
+    def list_filings(self, tenant_id: str, limit: int = 50) -> list[Filing]: ...
 
 
 class JobQueue(Protocol):
@@ -54,29 +59,37 @@ class JobQueue(Protocol):
 # In-memory implementations (local dev / tests)
 # ---------------------------------------------------------------------------
 class InMemoryRepository:
-    """Process-local filing store keyed by filing_id, with checksum dedup."""
+    """Process-local filing store keyed by filing_id, with per-tenant checksum
+    dedup and tenant-scoped reads."""
 
     def __init__(self) -> None:
         self._by_id: dict[str, Filing] = {}
-        self._checksums: set[str] = set()
+        # Dedup checksums scoped per tenant: (tenant_id, sha256).
+        self._checksums: set[tuple[str, str]] = set()
 
     def upsert_filing(self, filing: Filing) -> bool:
-        if filing.content_sha256 in self._checksums:
-            logger.info("Skipping duplicate filing (checksum match)", cik=filing.cik)
+        key = (filing.tenant_id, filing.content_sha256)
+        if key in self._checksums:
+            logger.info("Skipping duplicate filing (checksum match)", tenant_id=filing.tenant_id, cik=filing.cik)
             return False
         self._by_id[filing.filing_id] = filing
-        self._checksums.add(filing.content_sha256)
+        self._checksums.add(key)
         return True
 
-    def get_filing(self, filing_id: str) -> Filing | None:
-        return self._by_id.get(filing_id)
+    def get_filing(self, tenant_id: str, filing_id: str) -> Filing | None:
+        filing = self._by_id.get(filing_id)
+        # Tenant guard: never return another tenant's filing.
+        if filing is None or filing.tenant_id != tenant_id:
+            return None
+        return filing
 
-    def set_status(self, filing_id: str, status: IngestStatus) -> None:
-        if filing_id in self._by_id:
-            self._by_id[filing_id].status = status
+    def set_status(self, tenant_id: str, filing_id: str, status: IngestStatus) -> None:
+        filing = self._by_id.get(filing_id)
+        if filing is not None and filing.tenant_id == tenant_id:
+            filing.status = status
 
-    def list_filings(self, limit: int = 50) -> list[Filing]:
-        return list(self._by_id.values())[:limit]
+    def list_filings(self, tenant_id: str, limit: int = 50) -> list[Filing]:
+        return [f for f in self._by_id.values() if f.tenant_id == tenant_id][:limit]
 
 
 class InMemoryQueue:
@@ -98,9 +111,12 @@ class InMemoryQueue:
 # ---------------------------------------------------------------------------
 # Postgres implementation
 # ---------------------------------------------------------------------------
+# Note: the checksum uniqueness is scoped PER TENANT — the same public filing
+# can be independently ingested by different tenants without collision.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS filings (
     filing_id        TEXT PRIMARY KEY,
+    tenant_id        TEXT NOT NULL,
     cik              TEXT NOT NULL,
     ticker           TEXT,
     company_name     TEXT NOT NULL,
@@ -108,14 +124,26 @@ CREATE TABLE IF NOT EXISTS filings (
     accession_number TEXT NOT NULL,
     filing_date      DATE NOT NULL,
     source_url       TEXT NOT NULL,
-    content_sha256   TEXT NOT NULL UNIQUE,
+    content_sha256   TEXT NOT NULL,
     raw_text         TEXT NOT NULL DEFAULT '',
     status           TEXT NOT NULL DEFAULT 'PENDING',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, content_sha256)
 );
-CREATE INDEX IF NOT EXISTS idx_filings_cik ON filings (cik);
-CREATE INDEX IF NOT EXISTS idx_filings_status ON filings (status);
+CREATE INDEX IF NOT EXISTS idx_filings_tenant ON filings (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_filings_tenant_status ON filings (tenant_id, status);
+
+-- Defense in depth: Row-Level Security so a session can only see its tenant's
+-- rows. The application sets `SET app.tenant_id = '<tenant>'` per connection.
+ALTER TABLE filings ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'filings' AND policyname = 'tenant_isolation') THEN
+        CREATE POLICY tenant_isolation ON filings
+            USING (tenant_id = current_setting('app.tenant_id', true));
+    END IF;
+END$$;
 """
 
 
@@ -137,18 +165,23 @@ class PostgresRepository:
             cur.execute(_SCHEMA)
             conn.commit()
 
+    def _set_tenant(self, cur, tenant_id: str) -> None:
+        """Set the RLS session variable so Row-Level Security scopes all queries."""
+        cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
+
     def upsert_filing(self, filing: Filing) -> bool:
         with self._connect() as conn, conn.cursor() as cur:
+            self._set_tenant(cur, filing.tenant_id)
             cur.execute(
                 """
-                INSERT INTO filings (filing_id, cik, ticker, company_name, form,
+                INSERT INTO filings (filing_id, tenant_id, cik, ticker, company_name, form,
                     accession_number, filing_date, source_url, content_sha256,
                     raw_text, status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (content_sha256) DO NOTHING
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (tenant_id, content_sha256) DO NOTHING
                 """,
                 (
-                    filing.filing_id, filing.cik, filing.ticker, filing.company_name,
+                    filing.filing_id, filing.tenant_id, filing.cik, filing.ticker, filing.company_name,
                     filing.form.value, filing.accession_number, filing.filing_date,
                     filing.source_url, filing.content_sha256, filing.raw_text,
                     filing.status.value,
@@ -158,26 +191,33 @@ class PostgresRepository:
             conn.commit()
             return inserted
 
-    def get_filing(self, filing_id: str) -> Filing | None:
+    def get_filing(self, tenant_id: str, filing_id: str) -> Filing | None:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute("SELECT * FROM filings WHERE filing_id = %s", (filing_id,))
+            self._set_tenant(cur, tenant_id)
+            # Explicit tenant predicate in addition to RLS (belt and suspenders).
+            cur.execute("SELECT * FROM filings WHERE filing_id = %s AND tenant_id = %s", (filing_id, tenant_id))
             row = cur.fetchone()
             if not row:
                 return None
             cols = [d.name for d in cur.description]
             return _row_to_filing(dict(zip(cols, row, strict=True)))
 
-    def set_status(self, filing_id: str, status: IngestStatus) -> None:
+    def set_status(self, tenant_id: str, filing_id: str, status: IngestStatus) -> None:
         with self._connect() as conn, conn.cursor() as cur:
+            self._set_tenant(cur, tenant_id)
             cur.execute(
-                "UPDATE filings SET status=%s, updated_at=now() WHERE filing_id=%s",
-                (status.value, filing_id),
+                "UPDATE filings SET status=%s, updated_at=now() WHERE filing_id=%s AND tenant_id=%s",
+                (status.value, filing_id, tenant_id),
             )
             conn.commit()
 
-    def list_filings(self, limit: int = 50) -> list[Filing]:
+    def list_filings(self, tenant_id: str, limit: int = 50) -> list[Filing]:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute("SELECT * FROM filings ORDER BY created_at DESC LIMIT %s", (limit,))
+            self._set_tenant(cur, tenant_id)
+            cur.execute(
+                "SELECT * FROM filings WHERE tenant_id = %s ORDER BY created_at DESC LIMIT %s",
+                (tenant_id, limit),
+            )
             cols = [d.name for d in cur.description]
             return [_row_to_filing(dict(zip(cols, r, strict=True))) for r in cur.fetchall()]
 

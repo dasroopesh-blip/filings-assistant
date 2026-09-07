@@ -12,5 +12,10 @@
 - [x] 10. Terraform: VPC, OpenSearch, RDS, SQS+DLQ, Lambda, IAM, KMS, budgets
 - [x] 11. Docs: README, ARCHITECTURE, DESIGN, TERRAFORM_GUIDE + this spec
 - [x] 12. Unit tests: chunker, RRF/search, agent, config, tools
-- [ ] 13. Future: SageMaker reranker, evaluation harness, Fargate agent API
+- [x] 13. Multi-tenancy: TenantContext threaded through all layers incl. LLM/agent
+- [x] 14. SageMaker cross-encoder reranker stage (+ local fallback) + Terraform module
+- [x] 15. Query understanding (rewrite + metadata filter extraction)
+- [x] 16. Evaluation harness (Recall@k / MRR / nDCG + rerank comparison)
+- [x] 17. Cross-tenant isolation tests + docs (SEARCH_EXCELLENCE, MULTI_TENANCY)
+- [ ] 18. Future: fine-tuned domain reranker, Fargate agent API, embedding cache
 ```

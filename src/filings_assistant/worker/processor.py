@@ -18,6 +18,7 @@ from filings_assistant.common.bedrock import BedrockClient, get_bedrock_client
 from filings_assistant.common.config import Settings, get_settings
 from filings_assistant.common.logging import get_logger
 from filings_assistant.common.storage import FilingRepository, JobQueue, get_queue, get_repository
+from filings_assistant.common.tenant import TenantContext
 from filings_assistant.models import Chunk, Filing, IngestJob, IngestStatus
 from filings_assistant.search.chunker import chunk_text
 from filings_assistant.search.opensearch_store import VectorStore, get_vector_store
@@ -41,25 +42,26 @@ class WorkerProcessor:
         self._queue = queue or get_queue(self._settings)
         self._store = store or get_vector_store(self._settings)
         self._bedrock = bedrock or get_bedrock_client(self._settings)
-        self._store.ensure_index()
 
     def process_job(self, job: IngestJob) -> bool:
-        """Process one job. Returns True on success."""
-        filing = self._repo.get_filing(job.filing_id)
+        """Process one job. Returns True on success. Fully tenant-scoped."""
+        tenant = TenantContext.from_auth(job.tenant_id)
+        filing = self._repo.get_filing(tenant.tenant_id, job.filing_id)
         if filing is None:
-            logger.error("Filing not found for job", filing_id=job.filing_id)
+            logger.error("Filing not found for job", filing_id=job.filing_id, **tenant.log_fields())
             return False
         try:
-            self._repo.set_status(filing.filing_id, IngestStatus.INDEXING)
+            self._repo.set_status(tenant.tenant_id, filing.filing_id, IngestStatus.INDEXING)
+            self._store.ensure_index(tenant)
             chunks = self._build_chunks(filing)
             self._embed_chunks(chunks)
-            indexed = self._store.index_chunks(chunks)
-            self._repo.set_status(filing.filing_id, IngestStatus.INDEXED)
-            logger.info("Indexed filing", filing_id=filing.filing_id, chunks=indexed)
+            indexed = self._store.index_chunks(tenant, chunks)
+            self._repo.set_status(tenant.tenant_id, filing.filing_id, IngestStatus.INDEXED)
+            logger.info("Indexed filing", filing_id=filing.filing_id, chunks=indexed, **tenant.log_fields())
             return True
         except Exception as exc:
-            logger.error("Failed to index filing", filing_id=filing.filing_id, error=str(exc))
-            self._repo.set_status(filing.filing_id, IngestStatus.FAILED)
+            logger.error("Failed to index filing", filing_id=filing.filing_id, error=str(exc), **tenant.log_fields())
+            self._repo.set_status(tenant.tenant_id, filing.filing_id, IngestStatus.FAILED)
             return False
 
     def _build_chunks(self, filing: Filing) -> list[Chunk]:
@@ -70,7 +72,7 @@ class WorkerProcessor:
         )
         return [
             Chunk(
-                filing_id=filing.filing_id, cik=filing.cik, ticker=filing.ticker,
+                tenant_id=filing.tenant_id, filing_id=filing.filing_id, cik=filing.cik, ticker=filing.ticker,
                 company_name=filing.company_name, form=filing.form,
                 filing_date=filing.filing_date, source_url=filing.source_url,
                 section=section, chunk_index=i, text=text,

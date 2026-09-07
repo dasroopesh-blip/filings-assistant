@@ -14,4 +14,9 @@ from filings_assistant.common.config import Settings
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(run_mode="local", use_mock_bedrock=True, embedding_dimensions=64)
+    return Settings(
+        run_mode="local",
+        use_mock_bedrock=True,
+        embedding_dimensions=64,
+        enable_reranking=True,
+    )

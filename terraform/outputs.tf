@@ -28,3 +28,8 @@ output "worker_lambda_name" {
   description = "Name of the indexing worker Lambda."
   value       = module.compute.worker_function_name
 }
+
+output "reranker_endpoint_name" {
+  description = "SageMaker reranker endpoint name (empty if reranker disabled)."
+  value       = var.enable_reranker ? module.reranker[0].endpoint_name : ""
+}

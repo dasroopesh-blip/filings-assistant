@@ -24,8 +24,13 @@ def build_server():  # pragma: no cover - requires optional mcp dependency
     from mcp.server import Server
     from mcp.types import TextContent, Tool
 
+    from filings_assistant.common.tenant import default_tenant
+
     server = Server("filings-assistant")
-    registry = ToolRegistry()
+    # SECURITY: in a real deployment the tenant is resolved from the connecting
+    # principal's auth. For the stdio server we bind it from configuration
+    # (FA_DEFAULT_TENANT_ID) at startup — one server process serves one tenant.
+    registry = ToolRegistry(tenant=default_tenant())
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:

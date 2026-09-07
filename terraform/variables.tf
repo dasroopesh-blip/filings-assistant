@@ -66,6 +66,30 @@ variable "monthly_budget_usd" {
   default     = 150
 }
 
+variable "enable_reranker" {
+  description = "Whether to deploy the SageMaker cross-encoder reranker endpoint. Requires reranker_model_data_url + reranker_image_uri. Off by default so plan/apply works before a model is packaged (app falls back to fused ranking / local reranker)."
+  type        = bool
+  default     = false
+}
+
+variable "reranker_model_data_url" {
+  description = "S3 URI of the packaged reranker model artifact (model.tar.gz). Required when enable_reranker=true."
+  type        = string
+  default     = ""
+}
+
+variable "reranker_image_uri" {
+  description = "ECR image URI for the SageMaker inference container. Required when enable_reranker=true."
+  type        = string
+  default     = ""
+}
+
+variable "reranker_instance_type" {
+  description = "SageMaker reranker endpoint instance type."
+  type        = string
+  default     = "ml.m5.large"
+}
+
 variable "budget_alert_email" {
   description = "Email address to receive budget + monitoring alerts."
   type        = string

@@ -96,10 +96,54 @@ resource "aws_iam_role_policy" "worker" {
   policy = data.aws_iam_policy_document.worker.json
 }
 
+# --- SageMaker execution role (for the reranker endpoint) -------------------
+# SageMaker assumes this role to pull the model artifact from S3 and the
+# inference image from ECR, and to write logs. Scoped to the managed
+# SageMaker policy + KMS use; tighten the S3/ECR resources for production.
+data "aws_iam_policy_document" "sagemaker_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["sagemaker.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "sagemaker" {
+  name               = "${var.name_prefix}-sagemaker-role"
+  assume_role_policy = data.aws_iam_policy_document.sagemaker_assume.json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "sagemaker_full" {
+  role       = aws_iam_role.sagemaker.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+}
+
+# Allow the WORKER (which invokes reranking) to call the SageMaker endpoint.
+data "aws_iam_policy_document" "invoke_reranker" {
+  statement {
+    sid       = "InvokeSageMakerReranker"
+    actions   = ["sagemaker:InvokeEndpoint"]
+    resources = ["arn:aws:sagemaker:${var.aws_region}:${data.aws_caller_identity.current.account_id}:endpoint/${var.name_prefix}-*"]
+  }
+}
+
+resource "aws_iam_role_policy" "invoke_reranker" {
+  name   = "${var.name_prefix}-invoke-reranker"
+  role   = aws_iam_role.lambda.id
+  policy = data.aws_iam_policy_document.invoke_reranker.json
+}
+
 output "kms_key_arn" {
   value = aws_kms_key.this.arn
 }
 
 output "lambda_role_arn" {
   value = aws_iam_role.lambda.arn
+}
+
+output "sagemaker_role_arn" {
+  value = aws_iam_role.sagemaker.arn
 }

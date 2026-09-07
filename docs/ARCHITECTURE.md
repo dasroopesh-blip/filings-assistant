@@ -108,20 +108,34 @@ sequenceDiagram
     A-->>U: cited answer
 ```
 
-## Hybrid search + fusion
+## Ranking funnel: retrieve → fuse → rerank
 
-Two retrieval signals are combined with **Reciprocal Rank Fusion (RRF)**:
+Hybrid search is a three-stage funnel (`search/service.py`):
 
-- **BM25 keyword** — precise for exact terms/phrases (tickers, defined terms).
-- **k-NN vector** (Titan embeddings) — captures meaning/paraphrase.
+```
+Stage 1 RETRIEVE   OpenSearch BM25 + kNN (over-fetch ~50 candidates)
+Stage 2 FUSE       Reciprocal Rank Fusion (combine the two rankings)
+Stage 3 RERANK     SageMaker cross-encoder re-scores the shortlist → top k
+```
 
-RRF fuses the two *rankings* (not raw scores, which are on different scales):
+**Fusion (RRF)** combines the two *rankings* (not raw scores, which are on
+different scales):
 
 ```
 RRF(d) = Σ  1 / (k + rank_d)      across both result lists (k = 60)
 ```
 
-This reliably beats either signal alone and needs no score normalization.
+**Rerank** re-scores each `(query, passage)` pair jointly with a cross-encoder
+for precision the first stage can't reach. It runs only on the shortlist, so
+it's cheap. Backends: SageMaker endpoint (AWS) or a local lexical cross-scorer
+(offline). See `docs/SEARCH_EXCELLENCE.md`.
+
+## Multi-tenancy
+
+Every layer is isolated by `tenant_id` (sourced from auth, never from the
+prompt). OpenSearch uses a per-tenant index + tenant filter; Postgres uses a
+`tenant_id` column + Row-Level Security; tools/agent are bound to one tenant and
+expose no tenant argument. See `docs/MULTI_TENANCY.md`.
 
 ## Components
 
@@ -134,12 +148,16 @@ This reliably beats either signal alone and needs no score normalization.
 | SEC client | `ingestion/sec_client.py` | EDGAR fetch (+ offline samples) |
 | Ingestion | `ingestion/service.py` | fetch → store → enqueue |
 | Worker | `worker/processor.py` | chunk → embed → index |
+| Tenant context | `common/tenant.py` | immutable per-request tenant scope |
 | Chunker | `search/chunker.py` | overlapping windows + section detect |
-| Vector store | `search/opensearch_store.py` | index mapping + queries (+ in-memory) |
-| Search | `search/service.py` | keyword / semantic / hybrid (RRF) |
-| Tools | `mcp_server/tools.py` | shared tool registry + schemas |
+| Vector store | `search/opensearch_store.py` | per-tenant index mapping + queries (+ in-memory) |
+| Reranker | `search/reranker.py` | SageMaker cross-encoder (+ local fallback) |
+| Search | `search/service.py` | tenant-scoped funnel: retrieve → RRF → rerank |
+| Query understanding | `agent/query_understanding.py` | rewrite + extract metadata filters |
+| Evaluation | `evaluation/` | Recall@k, MRR, nDCG + rerank comparison |
+| Tools | `mcp_server/tools.py` | tenant-bound tool registry + schemas |
 | MCP server | `mcp_server/server.py` | expose tools over MCP stdio |
-| Agent | `agent/agent.py` | bounded tool-use reasoning loop |
+| Agent | `agent/agent.py` | tenant-scoped, bounded tool-use reasoning loop |
 
 ## Local vs AWS parity
 
@@ -151,7 +169,8 @@ business logic.
 | Dependency | Local | AWS |
 |---|---|---|
 | Embeddings / LLM | Mock (hash vectors, templated answers) | Bedrock (Titan, Claude) |
-| Vector store | In-memory brute-force | OpenSearch Service |
-| Source of truth | In-memory dict | RDS Postgres |
+| Vector store | In-memory brute-force | OpenSearch Service (per-tenant index) |
+| Reranker | Local lexical cross-scorer | SageMaker cross-encoder endpoint |
+| Source of truth | In-memory dict | RDS Postgres (RLS) |
 | Queue | In-memory deque | SQS (+ DLQ) |
 ```

@@ -67,6 +67,22 @@ class Settings(BaseSettings):
     chunk_size_tokens: int = 800
     chunk_overlap_tokens: int = 120
     top_k: int = 6
+    # Number of candidates the reranker re-scores (the shortlist size).
+    rerank_candidates: int = 50
+
+    # Multi-tenancy ---------------------------------------------------------
+    # "bridge" = shared cluster, index-per-tenant (default). "silo" = separate
+    # infra per tenant (deploy-time). App code uses per-tenant names either way.
+    tenancy_model: str = "bridge"
+    # Fallback tenant for local/dev single-tenant use. Production resolves the
+    # tenant from the auth token, never from this default.
+    default_tenant_id: str = "default"
+
+    # Reranking / SageMaker -------------------------------------------------
+    # If set (aws mode), the reranker calls this SageMaker endpoint. Empty =>
+    # use the local cross-encoder fallback.
+    sagemaker_reranker_endpoint: str = ""
+    enable_reranking: bool = True
 
     @property
     def pg_dsn(self) -> str:

@@ -12,11 +12,14 @@ import argparse
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ask the Filings Assistant a question")
     parser.add_argument("question", help="Natural-language question about ingested filings")
+    parser.add_argument("--tenant", default=None, help="Tenant id (defaults to FA_DEFAULT_TENANT_ID)")
     args = parser.parse_args(argv)
 
     from filings_assistant.agent.agent import FilingsAgent
+    from filings_assistant.common.tenant import TenantContext, default_tenant
 
-    result = FilingsAgent().ask(args.question)
+    tenant = TenantContext.from_auth(args.tenant) if args.tenant else default_tenant()
+    result = FilingsAgent(tenant=tenant).ask(args.question)
     print("\n=== ANSWER ===")
     print(result.answer)
     if result.citations:
