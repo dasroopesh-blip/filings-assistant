@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net">
+  <diagram name="LLD - Search Ranking Funnel" id="fa-rank-lld">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Search Ranking Funnel — LLD (retrieve -> fuse -> rerank)" style="text;fontSize=18;fontStyle=1;fillColor=none;" vertex="1" parent="1"><mxGeometry x="30" y="10" width="800" height="30" as="geometry" /></mxCell>
+
+        <mxCell id="query" value="Query (understood: rewritten text + metadata filters)&#10;tenant-scoped" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1"><mxGeometry x="500" y="60" width="360" height="55" as="geometry" /></mxCell>
+
+        <!-- Stage 1 -->
+        <mxCell id="st1" value="STAGE 1 — RETRIEVE (cheap, broad)" style="swimlane;startSize=28;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=13;" vertex="1" parent="1"><mxGeometry x="120" y="150" width="1120" height="180" as="geometry" /></mxCell>
+        <mxCell id="titan" value="Bedrock Titan V2&#10;embed query" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="st1"><mxGeometry x="40" y="50" width="150" height="60" as="geometry" /></mxCell>
+        <mxCell id="knn" value="OpenSearch kNN (HNSW, cosine)&#10;+ tenant filter&#10;top ~50" style="shape=mxgraph.aws4.opensearch_service;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="st1"><mxGeometry x="260" y="40" width="230" height="90" as="geometry" /></mxCell>
+        <mxCell id="bm25" value="OpenSearch BM25 (english analyzer)&#10;+ tenant filter&#10;top ~50" style="shape=mxgraph.aws4.opensearch_service;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="st1"><mxGeometry x="560" y="40" width="240" height="90" as="geometry" /></mxCell>
+        <mxCell id="s1note" value="Metadata filters (ticker/form/section) applied here.&#10;ANN = fast approximate NN; recall/latency tuned via ef_search, m." style="rounded=1;whiteSpace=wrap;fillColor=#eaf0fb;strokeColor=#6c8ebf;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="st1"><mxGeometry x="850" y="45" width="230" height="80" as="geometry" /></mxCell>
+        <mxCell id="r1" style="endArrow=block;rounded=1;" edge="1" parent="st1" source="titan" target="knn"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- Stage 2 -->
+        <mxCell id="st2" value="STAGE 2 — FUSE (Reciprocal Rank Fusion)" style="swimlane;startSize=28;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=13;" vertex="1" parent="1"><mxGeometry x="120" y="360" width="1120" height="150" as="geometry" /></mxCell>
+        <mxCell id="rrf" value="RRF(d) = Σ 1 / (k + rank_d),  k=60&#10;dedupe by chunk_id -> ordered shortlist (~50)" style="rounded=1;whiteSpace=wrap;fillColor=#eaf5ea;strokeColor=#82b366;fontSize=12;" vertex="1" parent="st2"><mxGeometry x="300" y="45" width="500" height="70" as="geometry" /></mxCell>
+        <mxCell id="rrfnote" value="Combines RANKINGS, not raw scores&#10;(BM25 vs cosine are on different scales).&#10;No score normalization needed." style="rounded=1;whiteSpace=wrap;fillColor=#eaf5ea;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="st2"><mxGeometry x="850" y="40" width="230" height="80" as="geometry" /></mxCell>
+
+        <!-- Stage 3 -->
+        <mxCell id="st3" value="STAGE 3 — RERANK (expensive, precise; shortlist only)" style="swimlane;startSize=28;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=13;" vertex="1" parent="1"><mxGeometry x="120" y="540" width="1120" height="170" as="geometry" /></mxCell>
+        <mxCell id="smr" value="SageMaker cross-encoder&#10;scores (query, passage) JOINTLY&#10;-> reorder -> top k" style="shape=mxgraph.aws4.sagemaker;whiteSpace=wrap;fillColor=#efe3f3;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="st3"><mxGeometry x="300" y="45" width="300" height="90" as="geometry" /></mxCell>
+        <mxCell id="local" value="Local reranker (offline fallback)&#10;lexical cross-scorer" style="rounded=1;whiteSpace=wrap;fillColor=#efe3f3;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="st3"><mxGeometry x="640" y="55" width="220" height="70" as="geometry" /></mxCell>
+        <mxCell id="s3note" value="Shared across tenants safely: sees only the&#10;already-tenant-filtered shortlist, keeps no state.&#10;Disable via FA_ENABLE_RERANKING=false." style="rounded=1;whiteSpace=wrap;fillColor=#efe3f3;strokeColor=#9673a6;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="st3"><mxGeometry x="890" y="40" width="200" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="final" value="Final ranked results (top k) -> Agent synthesizes cited answer" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="400" y="740" width="560" height="50" as="geometry" /></mxCell>
+
+        <mxCell id="a0" style="endArrow=block;rounded=1;" edge="1" parent="1" source="query" target="st1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a1" style="endArrow=block;rounded=1;" edge="1" parent="1" source="st1" target="st2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a2" style="endArrow=block;rounded=1;" edge="1" parent="1" source="st2" target="st3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a3" style="endArrow=block;rounded=1;" edge="1" parent="1" source="st3" target="final"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

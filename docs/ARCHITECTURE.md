@@ -3,6 +3,11 @@
 This document describes the high-level (HLD) and low-level (LLD) design of the
 Filings Assistant.
 
+> **Editable diagrams:** draw.io versions of the HLD and every per-component LLD
+> live in [`../diagrams/`](../diagrams/README.md) (`.drawio`, open at
+> [app.diagrams.net](https://app.diagrams.net)). The Mermaid diagrams below are
+> the inline, always-rendered summaries.
+
 ## System overview
 
 The system has two data flows — an **ingestion (write) path** and a **query
